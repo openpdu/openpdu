@@ -10,8 +10,8 @@ import json as JSON
 
 VERSION = 0.1
 defaults = {}
-boards = []
-
+_boards = []
+_outlets = []
 
 
 def version():
@@ -19,50 +19,55 @@ def version():
     return 'OpenPDU version %s - Copyright (C) 2018 by Paolo Asperti.' % VERSION
 
 @arg('-j', '--json', help="output in json")
-def dumpcfg(json=False):
-    'dump configuration'
+def boards(json=False):
+    'dump boards configuration'
     if json:
-        b = [board.toJSON() for board in boards]
+        b = [board.toJSON() for board in _boards]
         return JSON.dumps({'boards':b})
     else:
         b = ''
-        for board in boards:
+        for board in _boards:
             b += board.toSTR()
         return '\nBoards:\n' + b
 
+@arg('-j', '--json', help="output in json")
+def outlets(json=False):
+    'dump outlets configuration'
+    if json:
+        o = [outlet.toJSON() for outlet in _outlets]
+        return JSON.dumps({'outlets':o})
+    else:
+        o = ''
+        if len(_outlets)>0:
+            for outlet in _outlets:
+                o += outlet.toSTR()
+        return '\nOutlets:\n' + o
 
-@arg("board", help="board number")
-@arg("out", help="out number")
+
+@arg("outlet", help="outlet number")
 @arg("onoff", help="1=on [everything else]=off")
 @arg('-j', '--json', help="output in json")
-def setpower(board, out, onoff, json=False):
-    'enable or disable power to a socket'
-    b = [b for b in boards if b.boardnum==int(board)]
-    if len(b) != 1:
-        print 'wrong board number: %s' % str(board)
+def setpower(outlet, onoff, json=False):
+    'enable or disable power to an outlet'
+    o = [o for o in _outlets if o.outletnum==int(outlet)]
+    if len(o) != 1:
+        print 'wrong outlet number: %s' % str(outlet)
         sys.exit(1)
-    theBoard = b[0]
-    if int(out)>int(theBoard.channels)-1:
-        print 'wrong out number: %s, board has %s channels (0..%s)' % (str(out),str(theBoard.channels),str(int(theBoard.channels)-1))
-        sys.exit(1)
+    theOutlet = o[0]
     status = (onoff == '1')
-    return theBoard.setpower(int(out),status)
+    return theOutlet.setpower(status)
 
 
-@arg("board", help="board number")
-@arg("out", help="out number")
+@arg("outlet", help="outlet number")
 @arg('-j', '--json', help="output in json")
-def getpower(board, out, json=False):
-    'get socket power status'
-    b = [b for b in boards if b.boardnum==int(board)]
-    if len(b) != 1:
-        print 'wrong board number: %s' % str(board)
+def getpower(outlet, json=False):
+    'get outlet power status'
+    o = [o for o in _outlets if o.outletnum==int(outlet)]
+    if len(o) != 1:
+        print 'wrong outlet number: %s' % str(outlet)
         sys.exit(1)
-    theBoard = b[0]
-    if int(out)>int(theBoard.channels)-1:
-        print 'wrong out number: %s, board has %s channels (0..%s)' % (str(out),str(theBoard.channels),str(int(theBoard.channels)-1))
-        sys.exit(1)
-    return theBoard.getpower(int(out))
+    theOutlet = o[0]
+    return theOutlet.getpower()
 
 
 
@@ -85,12 +90,6 @@ class BoardI2COut(object):
             self.address = 0x20
         else:
             self.address = address
-
-    def dumpcfg(json=False):
-        if json:
-          return {'boardnum':self.boardnum,'type':'i2c-out','channels':self.channels,'address':self.address}
-        else:
-          return 'Board %i\nType: i2c-out\nChannels: %i\nAddress: %i' % (self.boardnum,self.channels,self.address)
 
     def toJSON(self):
         return {'boardnum':self.boardnum,'type':'i2c-out','channels':self.channels,'address':self.address}
@@ -120,12 +119,6 @@ class BoardGpioOut(object):
             print 'Wrong number of gpios specified for gpio board %s' % self.boardnum
         self.gpios = [int(gpio) for gpio in gpios]
 
-    def dumpcfg(json=False):
-        if json:
-          return {'boardnum':self.boardnum,'type':'gpio-out','channels':self.channels}
-        else:
-          return 'Board %i\nType: gpio-out\nChannels: %i ' % (self.boardnum,self.channels)
-
     def toJSON(self):
       return {'boardnum':self.boardnum,'type':'gpio-out','channels':self.channels}
 
@@ -146,11 +139,27 @@ class BoardGpioOut(object):
         return int(f.read()) == 0
 
 
+class Outlet(object):
+    def __init__(self, outletnum, boardnum, channel):
+        self.outletnum = int(outletnum)
+        b = [b for b in _boards if b.boardnum==int(boardnum)]
+        self.board = b[0]
+        self.channel = int(channel)
+        self.description = 'Outlet # %s' % self.outletnum
 
+    def setpower(self, power):
+        return self.board.setpower(self.channel,power)
 
+    def getpower(self):
+        return self.board.getpower(self.channel)
 
+    def toSTR(self):
+      status = self.board.getpower(self.channel)
+      return ' Outlet %s\n Description: %s\n Board #: %s\n Channel: %s\n Power Status:%s\n\n' % (self.outletnum,self.description,self.board.boardnum,self.channel,status)
 
-
+    def toJSON(self):
+      status = self.board.getpower(self.channel)
+      return {'outlet':self.outletnum,'description':self.description,'board':self.board.boardnum,'channel':self.channel,'powerstatus':status}
 
 
 
@@ -176,18 +185,25 @@ for s in configParser.sections():
             channels = int(configParser.get(s, 'channels'))
             gpios = []
             for g in range(0,channels):
-                gpios.append(int(configParser.get(s, 'out%s' % g)))
+                gpios.append(int(configParser.get(s, 'channel%s' % g)))
             b = BoardGpioOut(boardnum=num, channels=channels, gpios=gpios)
-            boards.append(b)
+            _boards.append(b)
         elif bType=='i2c-out':
             channels = int(configParser.get(s, 'channels'))
             address = configParser.get(s, 'address')
             b = BoardI2COut(boardnum=num, channels=channels, address=address)
-            boards.append(b)
-
+            _boards.append(b)
+    if re.match('^outlet.*',s):
+        num = int(re.sub(r'^outlet','',s))
+        description = configParser.get(s, 'description')
+        boardnum = configParser.get(s, 'board')
+        channel = configParser.get(s, 'channel')
+        o = Outlet(outletnum=num, boardnum=boardnum, channel=channel)
+        o.description = description
+        _outlets.append(o)
 
 parser = argh.ArghParser()
-parser.add_commands([setpower, getpower, dumpcfg, version])
+parser.add_commands([setpower, getpower, outlets, boards, version])
 
 # dispatching:
 
