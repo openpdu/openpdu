@@ -87,7 +87,7 @@ def getpower(outlet, json=False):
 
 
 class BoardI2COut(object):
-    def __init__(self, boardnum, channels=None, address=None):
+    def __init__(self, boardnum, channels=None, address=None, bus=None):
         self.boardnum = boardnum
         if channels is None:
             self.channels = 0
@@ -97,6 +97,12 @@ class BoardI2COut(object):
             self.address = 0x20
         else:
             self.address = address
+        if bus is None:
+            self.bus = 1
+        else:
+            self.bus = bus
+        if not glob.glob('/dev/i2c*'):
+            raise OSError('Cannot access I2C. Please ensure I2C is enabled')
 
     def toJSON(self):
         return {'boardnum':self.boardnum,'type':'i2c-out','channels':self.channels,'address':self.address}
@@ -202,7 +208,8 @@ for s in configParser.sections():
         elif bType=='i2c-out':
             channels = int(configParser.get(s, 'channels'))
             address = configParser.get(s, 'address')
-            b = BoardI2COut(boardnum=num, channels=channels, address=address)
+            bus = configParser.get(s, 'bus')
+            b = BoardI2COut(boardnum=num, channels=channels, address=address, bus=bus)
             _boards.append(b)
     if re.match('^outlet.*',s):
         num = int(re.sub(r'^outlet','',s))
