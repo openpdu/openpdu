@@ -7,11 +7,12 @@ pkgdesc="OpenPDU project - main binary"
 url="https://github.com/openpdu/openpdu"
 arch="noarch"
 license="GPL2"
-depends="python, py-argh, apk-cron"
+depends="python py-argh apk-cron"
 makedepends=""
 install="openpdu.post-install"
 subpackages=""
 source=""
+options="!check"
 
 build() {
 	:
