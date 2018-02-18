@@ -22,5 +22,5 @@ package() {
 	install -Dm644 etc/openpdu/openpdu.conf "$pkgdir"/etc/openpdu/openpdu.conf
 	install -Dm755 etc/local.d/openpdu.start "$pkgdir"/etc/local.d/openpdu.start
 
-	install -Dm755 openpdu "$pkgdir"/usr/sbin/openpdu
+	install -Dm755 openpdu "$pkgdir"/usr/bin/openpdu
 }
