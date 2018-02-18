@@ -4,7 +4,9 @@ import os
 import sys
 import argh
 from argh import arg
+from subprocess import call
 import re
+import glob
 import ConfigParser
 import json as JSON
 
@@ -29,6 +31,14 @@ def boards(json=False):
         for board in _boards:
             b += board.toSTR()
         return '\nBoards:\n' + b
+
+
+def initboards():
+    'initialize boards'
+    for board in _boards:
+        board.init()
+    return
+
 
 @arg('-j', '--json', help="output in json")
 def outlets(json=False):
@@ -85,7 +95,7 @@ def getpower(outlet, json=False):
 
 
 
-
+# MCP23008
 class BoardI2COut(object):
     def __init__(self, boardnum, channels=None, address=None, bus=None):
         self.boardnum = boardnum
@@ -111,10 +121,19 @@ class BoardI2COut(object):
         return ' Board %s\n Type: i2c-out\n Channels: %s\n Address: %s\n\n' % (self.boardnum,self.channels,self.address)
 
     def setpower(self, channel, power):
-        return
+        d = self.getpower(channel)
+        mask = 1 << channel
+        d &= ~mask
+        if power:
+            d |= mask
+        #i2cset -y 1 0x20 0x09 0xFF
+        return os.popen("/usr/sbin/i2cset -y %s %s 0x09 0x%s" % (self.bus, self.address, format(d, '02x'))).read()
 
     def getpower(self, channel):
-        return False
+        return os.popen("/usr/sbin/i2cget -y %s %s 0x09" % (self.bus, self.address)).read()
+
+    def init(self):
+        call(["/usr/sbin/i2cset", "-y", self.bus, self.address, "0x00", "0x00"])
 
 
 class BoardGpioOut(object):
@@ -150,6 +169,13 @@ class BoardGpioOut(object):
         fn = '/sys/class/gpio/gpio%s/value' % io
         f = open(fn,'r')
         return int(f.read()) == 0
+
+    def init(self):
+        for gpio in self.gpios:
+            open('/sys/class/gpio/export','w').write(str(gpio))
+            fn = '/sys/class/gpio/gpio%s/direction' % gpio
+            open(fn,'w').write('out')
+        return
 
 
 class Outlet(object):
@@ -221,7 +247,7 @@ for s in configParser.sections():
         _outlets.append(o)
 
 parser = argh.ArghParser()
-parser.add_commands([setpower, getpower, outlets, boards, version])
+parser.add_commands([setpower, getpower, outlets, boards, initboards, version])
 
 # dispatching:
 
