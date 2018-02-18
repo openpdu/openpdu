@@ -49,32 +49,39 @@ def outlets(json=False):
 @arg('-j', '--json', help="output in json")
 def setpower(outlet, onoff, json=False):
     'enable or disable power to an outlet'
-    o = [o for o in _outlets if o.outletnum==int(outlet)]
+    outlet=int(outlet)
+    o = [o for o in _outlets if o.outletnum==outlet]
     if len(o) != 1:
-        print 'wrong outlet number: %s' % str(outlet)
+        msg = 'wrong outlet number: %s' % str(outlet)
+        print JSON.dumps({'message':msg}) if json else msg
         sys.exit(1)
     theOutlet = o[0]
     status = (onoff == '1')
-    return theOutlet.setpower(status)
+    out = theOutlet.setpower(status)
+    if out is None:
+        msg = "Cannot set power status for outlet %s" % outlet
+        return JSON.dumps({'message':msg,'outlet':outlet}) if json else msg
+    else:
+        pwrstr = 'on' if out==1 else 'off'
+        msg = "Outlet #%s powered %s" % (outlet, pwrstr)
+        return JSON.dumps({'powerstatus':out==1,'outlet':outlet}) if json else msg
 
 
 @arg("outlet", help="outlet number")
 @arg('-j', '--json', help="output in json")
 def getpower(outlet, json=False):
     'get outlet power status'
-    o = [o for o in _outlets if o.outletnum==int(outlet)]
+    outlet=int(outlet)
+    o = [o for o in _outlets if o.outletnum==outlet]
     if len(o) != 1:
-        print 'wrong outlet number: %s' % str(outlet)
+        msg = 'wrong outlet number: %s' % str(outlet)
+        print JSON.dumps({'message':msg}) if json else msg
         sys.exit(1)
     theOutlet = o[0]
-    return theOutlet.getpower()
-
-
-
-
-
-
-
+    out = theOutlet.getpower()
+    pwrstr = 'on' if out else 'off'
+    msg = "Outlet #%s powered %s" % (outlet, pwrstr)
+    return JSON.dumps({'powerstatus':out,'outlet':outlet}) if json else msg
 
 
 
@@ -148,7 +155,11 @@ class Outlet(object):
         self.description = 'Outlet # %s' % self.outletnum
 
     def setpower(self, power):
-        return self.board.setpower(self.channel,power)
+        self.board.setpower(self.channel,power)
+        if self.board.getpower(self.channel) == power:
+            return power
+        else:
+            return None
 
     def getpower(self):
         return self.board.getpower(self.channel)
