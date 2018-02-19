@@ -7,6 +7,7 @@ from argh import arg
 from subprocess import call
 import re
 import glob
+import time
 import ConfigParser
 import json as JSON
 
@@ -97,6 +98,10 @@ def getpower(outlet, json=False):
 
 # MCP23008
 class BoardI2COut(object):
+    data = 0
+    next_refresh = 0
+    lifetime_sec = 2
+
     def __init__(self, boardnum, channels=None, address=None, bus=None):
         self.boardnum = boardnum
         if channels is None:
@@ -121,16 +126,26 @@ class BoardI2COut(object):
         return ' Board %s\n Type: i2c-out\n Channels: %s\n Address: %s\n\n' % (self.boardnum,self.channels,self.address)
 
     def setpower(self, channel, power):
-        d = self.getpower(channel)
+        old_data = data = self.getdata()
         mask = 1 << channel
-        d &= ~mask
+        data &= ~mask
         if power:
-            d |= mask
-        #i2cset -y 1 0x20 0x09 0xFF
-        return os.popen("/usr/sbin/i2cset -y %s %s 0x09 0x%s" % (self.bus, self.address, format(d, '02x'))).read()
+            data |= mask
+        if old_data != data:
+            self.next_refresh = 0
+        return os.popen("/usr/sbin/i2cset -y %s %s 0x09 0x%s" % (self.bus, self.address, format(data, '02x'))).read()
 
     def getpower(self, channel):
-        return os.popen("/usr/sbin/i2cget -y %s %s 0x09" % (self.bus, self.address)).read()
+        data = self.getdata()
+        d = ( data >> channel ) & 1
+        return d == 1
+
+    def getdata(self):
+        now = time.time()
+        if now > self.next_refresh:
+            self.data = int(os.popen("/usr/sbin/i2cget -y %s %s 0x0A" % (self.bus, self.address)).read(),0)
+            self.next_refresh = now + self.lifetime_sec
+        return self.data
 
     def init(self):
         call(["/usr/sbin/i2cset", "-y", self.bus, self.address, "0x00", "0x00"])
