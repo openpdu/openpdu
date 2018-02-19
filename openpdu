@@ -12,7 +12,8 @@ import ConfigParser
 import json as JSON
 
 VERSION = 0.1
-defaults = {}
+boardsDefaults = {}
+outletsDefaults = {'description': 'Generic outlet','startpower':0}
 _boards = []
 _outlets = []
 
@@ -40,6 +41,11 @@ def initboards():
         board.init()
     return
 
+def initoutlets():
+    'initialize outlets'
+    for outlet in _outlets:
+        outlet.init()
+    return
 
 @arg('-j', '--json', help="output in json")
 def outlets(json=False):
@@ -187,19 +193,25 @@ class BoardGpioOut(object):
 
     def init(self):
         for gpio in self.gpios:
-            open('/sys/class/gpio/export','w').write(str(gpio))
+            if not os.path.isdir('/sys/class/gpio/gpio%s/' % gpio):
+                open('/sys/class/gpio/export','w').write(str(gpio))
             fn = '/sys/class/gpio/gpio%s/direction' % gpio
             open(fn,'w').write('out')
         return
 
 
 class Outlet(object):
-    def __init__(self, outletnum, boardnum, channel):
+    def __init__(self, outletnum, boardnum, channel, startpower=False):
         self.outletnum = int(outletnum)
         b = [b for b in _boards if b.boardnum==int(boardnum)]
         self.board = b[0]
         self.channel = int(channel)
         self.description = 'Outlet # %s' % self.outletnum
+        self.startpower = startpower
+
+    def init(self):
+        self.setpower(self.startpower)
+        return
 
     def setpower(self, power):
         self.board.setpower(self.channel,power)
@@ -229,37 +241,45 @@ class Outlet(object):
 
 
 
-configParser = ConfigParser.SafeConfigParser(defaults=defaults)
+boardsConfigParser = ConfigParser.SafeConfigParser(defaults=boardsDefaults)
+boardsConfigFile = '/etc/openpdu/boards.conf'
+if os.path.isfile(boardsConfigFile) and os.access(boardsConfigFile, os.R_OK):
+  boardsConfigParser.read(boardsConfigFile)
 
-configFile = '/etc/openpdu/openpdu.conf'
-if os.path.isfile(configFile) and os.access(configFile, os.R_OK):
-  configParser.read(configFile)
-
-for s in configParser.sections():
+for s in boardsConfigParser.sections():
     if re.match('^board.*',s):
-        bType = configParser.get(s, 'type')
+        bType = boardsConfigParser.get(s, 'type')
         num = int(re.sub(r'^board','',s))
         if bType=='gpio-out':
-            channels = int(configParser.get(s, 'channels'))
+            channels = int(boardsConfigParser.get(s, 'channels'))
             gpios = []
             for g in range(0,channels):
-                gpios.append(int(configParser.get(s, 'channel%s' % g)))
+                gpios.append(int(boardsConfigParser.get(s, 'channel%s' % g)))
             b = BoardGpioOut(boardnum=num, channels=channels, gpios=gpios)
             _boards.append(b)
         elif bType=='i2c-out':
-            channels = int(configParser.get(s, 'channels'))
-            address = configParser.get(s, 'address')
-            bus = configParser.get(s, 'bus')
+            channels = int(boardsConfigParser.get(s, 'channels'))
+            address = boardsConfigParser.get(s, 'address')
+            bus = boardsConfigParser.get(s, 'bus')
             b = BoardI2COut(boardnum=num, channels=channels, address=address, bus=bus)
             _boards.append(b)
+
+outletsConfigParser = ConfigParser.SafeConfigParser(defaults=outletsDefaults)
+outletsConfig = '/etc/openpdu/outlets.conf'
+if os.path.isfile(outletsConfig) and os.access(outletsConfig, os.R_OK):
+  outletsConfigParser.read(outletsConfig)
+for s in outletsConfigParser.sections():
     if re.match('^outlet.*',s):
         num = int(re.sub(r'^outlet','',s))
-        description = configParser.get(s, 'description')
-        boardnum = configParser.get(s, 'board')
-        channel = configParser.get(s, 'channel')
-        o = Outlet(outletnum=num, boardnum=boardnum, channel=channel)
+        description = outletsConfigParser.get(s, 'description')
+        boardnum = outletsConfigParser.get(s, 'board')
+        channel = outletsConfigParser.get(s, 'channel')
+        startpower = outletsConfigParser.get(s, 'startpower') == 1
+        o = Outlet(outletnum=num, boardnum=boardnum, channel=channel, startpower=startpower)
         o.description = description
         _outlets.append(o)
+
+
 
 parser = argh.ArghParser()
 parser.add_commands([setpower, getpower, outlets, boards, initboards, version])
