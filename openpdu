@@ -12,8 +12,8 @@ import ConfigParser
 import json as JSON
 
 VERSION = '0.1.1'
-boardsDefaults = {}
-outletsDefaults = {'description': 'Generic outlet','startpower':0}
+boardsDefaults = {'inverted':False}
+outletsDefaults = {'description': 'Generic outlet','startpower':False}
 _boards = []
 _outlets = []
 
@@ -108,7 +108,7 @@ class BoardI2COut(object):
     next_refresh = 0
     lifetime_sec = 2
 
-    def __init__(self, boardnum, channels=None, address=None, bus=None):
+    def __init__(self, boardnum, channels=None, address=None, bus=None, inverted=False):
         self.boardnum = boardnum
         if channels is None:
             self.channels = 0
@@ -122,6 +122,7 @@ class BoardI2COut(object):
             self.bus = 1
         else:
             self.bus = bus
+        self.inverted = inverted
         if not glob.glob('/dev/i2c*'):
             raise OSError('Cannot access I2C. Please ensure I2C is enabled')
 
@@ -135,6 +136,8 @@ class BoardI2COut(object):
         old_data = data = self.getdata()
         mask = 1 << channel
         data &= ~mask
+        if self.inverted:
+            power = not power
         if power:
             data |= mask
         if old_data != data:
@@ -144,7 +147,8 @@ class BoardI2COut(object):
     def getpower(self, channel):
         data = self.getdata()
         d = ( data >> channel ) & 1
-        return d == 1
+        c = 0 if self.inverted else 1
+        return d == c
 
     def getdata(self):
         now = time.time()
@@ -160,12 +164,13 @@ class BoardI2COut(object):
 class BoardGpioOut(object):
     gpios = []
 
-    def __init__(self, boardnum, channels=None, gpios=None):
+    def __init__(self, boardnum, channels=None, gpios=None, inverted=False):
         self.boardnum = boardnum
         if channels is None:
             self.channels = 0
         else:
             self.channels = int(channels)
+        self.inverted = inverted
         if not isinstance(gpios, list):
             print 'No gpios specified for gpio board %s' % self.boardnum
         if len(gpios) != self.channels:
@@ -182,14 +187,20 @@ class BoardGpioOut(object):
         io = self.gpios[channel]
         fn = '/sys/class/gpio/gpio%s/value' % io
         f = open(fn,'w')
-        out = '0' if power else '1'
+        if self.inverted:
+            power = not power
+        out = '1' if power else '0'
         return f.write(out)
 
     def getpower(self, channel):
         io = self.gpios[channel]
         fn = '/sys/class/gpio/gpio%s/value' % io
         f = open(fn,'r')
-        return int(f.read()) == 0
+        e = f.read()
+        power = int('0'+e) == 1
+        if self.inverted:
+            power = not power
+        return power
 
     def init(self):
         for gpio in self.gpios:
@@ -250,18 +261,19 @@ for s in boardsConfigParser.sections():
     if re.match('^board.*',s):
         bType = boardsConfigParser.get(s, 'type')
         num = int(re.sub(r'^board','',s))
+        inverted = int('0' + boardsConfigParser.get(s, 'inverted')) == 1
         if bType=='gpio-out':
             channels = int(boardsConfigParser.get(s, 'channels'))
             gpios = []
             for g in range(0,channels):
                 gpios.append(int(boardsConfigParser.get(s, 'channel%s' % g)))
-            b = BoardGpioOut(boardnum=num, channels=channels, gpios=gpios)
+            b = BoardGpioOut(boardnum=num, channels=channels, gpios=gpios, inverted=inverted)
             _boards.append(b)
         elif bType=='i2c-out':
             channels = int(boardsConfigParser.get(s, 'channels'))
             address = boardsConfigParser.get(s, 'address')
             bus = boardsConfigParser.get(s, 'bus')
-            b = BoardI2COut(boardnum=num, channels=channels, address=address, bus=bus)
+            b = BoardI2COut(boardnum=num, channels=channels, address=address, bus=bus, inverted=inverted)
             _boards.append(b)
 
 outletsConfigParser = ConfigParser.SafeConfigParser(defaults=outletsDefaults)
@@ -274,7 +286,7 @@ for s in outletsConfigParser.sections():
         description = outletsConfigParser.get(s, 'description')
         boardnum = outletsConfigParser.get(s, 'board')
         channel = outletsConfigParser.get(s, 'channel')
-        startpower = outletsConfigParser.get(s, 'startpower') == 1
+        startpower = int('0' + outletsConfigParser.get(s, 'startpower')) == 1
         o = Outlet(outletnum=num, boardnum=boardnum, channel=channel, startpower=startpower)
         o.description = description
         _outlets.append(o)
