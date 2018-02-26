@@ -101,6 +101,54 @@ def getpower(outlet, json=False):
     return JSON.dumps({'powerstatus':out,'outlet':outlet}) if json else msg
 
 
+class BoardDummy(object):
+    channels = []
+
+    def __init__(self, boardnum, channels=None, filename=None):
+        self.boardnum = boardnum
+        if channels is None:
+            self.channels = 1
+        else:
+            self.channels = int(channels)
+        self.parser = ConfigParser.SafeConfigParser()
+        self.filename = filename
+        if os.path.isfile(filename) and os.access(filename, os.R_OK):
+            pass
+        else:
+            with open(self.filename, 'wb') as theFile:
+                self.parser.add_section('STATUS')
+                for c in range(0,self.channels):
+                    self.parser.set('STATUS', 'channel%s' % c, '0')
+                self.parser.write(theFile)
+
+    def toJSON(self):
+      return {'boardnum':self.boardnum,'type':'dummy','channels':self.channels}
+
+    def toSTR(self):
+      return ' Board %s\n Type: dummy\n Channels: %s\n\n' % (self.boardnum,self.channels)
+
+    def setpower(self, channel, power):
+        self.parser.read(self.filename)
+        p = '1' if power else '0'
+        s = self.parser.set('STATUS', 'channel%s' % channel, p)
+        with open(self.filename, 'wb') as theFile:
+            return self.parser.write(theFile)
+        return False
+
+    def getpower(self, channel):
+        self.parser.read(self.filename)
+        s = self.parser.get('STATUS', 'channel%s' % channel)
+        return int(s)==1
+
+    def init(self):
+        pass
+
+
+
+
+
+
+
 
 # MCP23008
 class BoardI2COut(object):
@@ -262,18 +310,21 @@ for s in boardsConfigParser.sections():
         bType = boardsConfigParser.get(s, 'type')
         num = int(re.sub(r'^board','',s))
         inverted = int('0' + boardsConfigParser.get(s, 'inverted')) == 1
-        if bType=='gpio-out':
             channels = int(boardsConfigParser.get(s, 'channels'))
+        if bType=='gpio-out':
             gpios = []
             for g in range(0,channels):
                 gpios.append(int(boardsConfigParser.get(s, 'channel%s' % g)))
             b = BoardGpioOut(boardnum=num, channels=channels, gpios=gpios, inverted=inverted)
             _boards.append(b)
         elif bType=='i2c-out':
-            channels = int(boardsConfigParser.get(s, 'channels'))
             address = boardsConfigParser.get(s, 'address')
             bus = boardsConfigParser.get(s, 'bus')
             b = BoardI2COut(boardnum=num, channels=channels, address=address, bus=bus, inverted=inverted)
+            _boards.append(b)
+        elif bType=='dummy':
+            filename = boardsConfigParser.get(s, 'filename')
+            b = BoardDummy(boardnum=num, channels=channels, filename=filename)
             _boards.append(b)
 
 outletsConfigParser = ConfigParser.SafeConfigParser(defaults=outletsDefaults)
