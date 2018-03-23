@@ -310,7 +310,7 @@ for s in boardsConfigParser.sections():
         bType = boardsConfigParser.get(s, 'type')
         num = int(re.sub(r'^board','',s))
         inverted = int('0' + boardsConfigParser.get(s, 'inverted')) == 1
-            channels = int(boardsConfigParser.get(s, 'channels'))
+        channels = int(boardsConfigParser.get(s, 'channels'))
         if bType=='gpio-out':
             gpios = []
             for g in range(0,channels):
