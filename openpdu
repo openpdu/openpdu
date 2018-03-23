@@ -345,7 +345,7 @@ for s in outletsConfigParser.sections():
 
 
 parser = argh.ArghParser()
-parser.add_commands([setpower, getpower, outlets, boards, initboards, version])
+parser.add_commands([setpower, getpower, outlets, boards, initboards, version, initoutlets])
 
 # dispatching:
 
