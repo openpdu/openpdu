@@ -11,7 +11,7 @@ import time
 import ConfigParser
 import json as JSON
 
-VERSION = '0.1.1'
+VERSION = '0.1.2'
 boardsDefaults = {'inverted':False}
 outletsDefaults = {'description': 'Generic outlet','startpower':False}
 _boards = []

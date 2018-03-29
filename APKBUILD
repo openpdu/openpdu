@@ -1,7 +1,7 @@
 # Contributor: Paolo Asperti <paolo@asperti.com>
 # Maintainer: Paolo Asperti <paolo@asperti.com>
 pkgname=openpdu
-pkgver=0.1.1
+pkgver=0.1.2
 pkgrel=1
 pkgdesc="OpenPDU project - main binary"
 url="https://github.com/openpdu/openpdu"
