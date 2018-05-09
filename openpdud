@@ -1,0 +1,394 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argh
+#from argh import arg
+import re
+import glob
+import time
+import ConfigParser
+import json as JSON
+from bottle import route, run, template
+import smbus2
+#import math
+#from numpy import mean, sqrt, square
+
+
+
+
+VERSION = '0.1.2'
+boardsDefaults = {'inverted':False}
+outletsDefaults = {'description': 'Generic outlet','startpower':False}
+_boards = []
+_outlets = []
+
+
+
+
+@route('/version')
+def index():
+    return VERSION
+
+@route('/boards')
+def index():
+  b = [board.toJSON() for board in _boards]
+  return JSON.dumps({'boards':b})
+
+@route('/initboards')
+def index():
+    for board in _boards:
+        board.init()
+    return
+
+@route('/initoutlets')
+def index():
+    for outlet in _outlets:
+        outlet.init()
+    return
+
+@route('/outlets')
+def index():
+    o = [outlet.toJSON() for outlet in _outlets]
+    return JSON.dumps({'outlets':o})
+
+@route('/outlet/<outlet>/power/<onoff>')
+def index(outlet, onoff):
+    outlet=int(outlet)
+    o = [o for o in _outlets if o.outletnum==outlet]
+    if len(o) != 1:
+        msg = 'wrong outlet number: %s' % str(outlet)
+        return JSON.dumps({'message':msg})
+    theOutlet = o[0]
+    status = (onoff == 'on')
+    out = theOutlet.setpower(status)
+    if out is None:
+        msg = "Cannot set power status for outlet %s" % outlet
+        return JSON.dumps({'message':msg,'outlet':outlet})
+    else:
+        pwrstr = 'on' if out==1 else 'off'
+        msg = "Outlet #%s powered %s" % (outlet, pwrstr)
+        return JSON.dumps({'powerstatus':out==1,'outlet':outlet})
+
+@route('/outlet/<outlet>/power')
+def index(outlet):
+    outlet=int(outlet)
+    o = [o for o in _outlets if o.outletnum==outlet]
+    if len(o) != 1:
+        msg = 'wrong outlet number: %s' % str(outlet)
+        return JSON.dumps({'message':msg})
+    theOutlet = o[0]
+    out = theOutlet.getpower()
+    return JSON.dumps({'powerstatus':out,'outlet':outlet})
+
+
+
+
+
+
+
+
+
+class BoardDummy(object):
+  channels = []
+
+  def __init__(self, boardnum, channels=None, filename=None):
+      self.boardnum = boardnum
+      if channels is None:
+          self.channels = 1
+      else:
+          self.channels = int(channels)
+      self.parser = ConfigParser.SafeConfigParser()
+      self.filename = filename
+      if os.path.isfile(filename) and os.access(filename, os.R_OK):
+          pass
+      else:
+          with open(self.filename, 'wb') as theFile:
+              self.parser.add_section('STATUS')
+              for c in range(0,self.channels):
+                  self.parser.set('STATUS', 'channel%s' % c, '0')
+              self.parser.write(theFile)
+
+  def toJSON(self):
+    return {'boardnum':self.boardnum,'type':'dummy','channels':self.channels}
+
+  def setpower(self, channel, power):
+      self.parser.read(self.filename)
+      p = '1' if power else '0'
+      s = self.parser.set('STATUS', 'channel%s' % channel, p)
+      with open(self.filename, 'wb') as theFile:
+          return self.parser.write(theFile)
+      return False
+
+  def getpower(self, channel):
+      self.parser.read(self.filename)
+      s = self.parser.get('STATUS', 'channel%s' % channel)
+      return int(s)==1
+
+  def init(self):
+      pass
+
+
+
+
+
+
+
+
+# MCP23008
+class BoardI2COut(object):
+  data = 0
+  next_refresh = 0
+  lifetime_sec = 2
+
+  def __init__(self, boardnum, channels=None, address=None, bus=None, inverted=False):
+      self.boardnum = boardnum
+      if channels is None:
+          self.channels = 0
+      else:
+          self.channels = channels
+      if address is None:
+          self.address = 0x20
+      else:
+          self.address = int(address, 16)
+      if bus is None:
+          self.bus = 1
+      else:
+          self.bus = bus
+      self.inverted = inverted
+      if not glob.glob('/dev/i2c*'):
+          raise OSError('Cannot access I2C. Please ensure I2C is enabled')
+      self._bus = smbus2.SMBus(self.bus)
+
+  def toJSON(self):
+      return {'boardnum':self.boardnum,'type':'i2c-out','channels':self.channels,'address':self.address}
+
+  def setpower(self, channel, power):
+      old_data = data = self.getdata()
+      mask = 1 << channel
+      data &= ~mask
+      if self.inverted:
+          power = not power
+      if power:
+          data |= mask
+      if old_data != data:
+          self.next_refresh = 0
+      return self._bus.write_byte_data(self.address, 0x09,data)
+
+  def getpower(self, channel):
+      data = self.getdata()
+      d = ( data >> channel ) & 1
+      c = 0 if self.inverted else 1
+      return d == c
+
+  def getdata(self):
+      now = time.time()
+      if now > self.next_refresh:
+          self.data = self._bus.read_byte_data(self.address, 0x0A)
+          self.next_refresh = now + self.lifetime_sec
+      return self.data
+
+  def init(self):
+      return self._bus.write_byte_data(self.address, 0x00, 0x00)
+
+
+class BoardGpioOut(object):
+  gpios = []
+
+  def __init__(self, boardnum, channels=None, gpios=None, inverted=False):
+      self.boardnum = boardnum
+      if channels is None:
+          self.channels = 0
+      else:
+          self.channels = int(channels)
+      self.inverted = inverted
+      if not isinstance(gpios, list):
+          print 'No gpios specified for gpio board %s' % self.boardnum
+      if len(gpios) != self.channels:
+          print 'Wrong number of gpios specified for gpio board %s' % self.boardnum
+      self.gpios = [int(gpio) for gpio in gpios]
+
+  def toJSON(self):
+    return {'boardnum':self.boardnum,'type':'gpio-out','channels':self.channels,'inverted':self.inverted}
+
+  def setpower(self, channel, power):
+      io = self.gpios[channel]
+      fn = '/sys/class/gpio/gpio%s/value' % io
+      f = open(fn,'w')
+      if self.inverted:
+          power = not power
+      out = '1' if power else '0'
+      return f.write(out)
+
+  def getpower(self, channel):
+      io = self.gpios[channel]
+      fn = '/sys/class/gpio/gpio%s/value' % io
+      f = open(fn,'r')
+      e = f.read()
+      power = int('0'+e) == 1
+      if self.inverted:
+          power = not power
+      return power
+
+  def init(self):
+      for gpio in self.gpios:
+          if not os.path.isdir('/sys/class/gpio/gpio%s/' % gpio):
+              open('/sys/class/gpio/export','w').write(str(gpio))
+          fn = '/sys/class/gpio/gpio%s/direction' % gpio
+          open(fn,'w').write('out')
+      return
+
+
+class Outlet(object):
+  def __init__(self, outletnum, boardnum, channel, startpower=False):
+      self.outletnum = int(outletnum)
+      b = [b for b in _boards if b.boardnum==int(boardnum)]
+      self.board = b[0]
+      self.channel = int(channel)
+      self.description = 'Outlet # %s' % self.outletnum
+      self.startpower = startpower
+
+  def init(self):
+      self.setpower(self.startpower)
+      return
+
+  def setpower(self, power):
+      self.board.setpower(self.channel,power)
+      if self.board.getpower(self.channel) == power:
+          return power
+      else:
+          return None
+
+  def getpower(self):
+      return self.board.getpower(self.channel)
+
+  def toJSON(self):
+    status = self.board.getpower(self.channel)
+    return {'outlet':self.outletnum,'description':self.description,'board':self.board.boardnum,'channel':self.channel,'powerstatus':status}
+
+
+
+
+class BoardI2Ccurrent(object):
+  data = 0
+  next_refresh = 0
+  lifetime_sec = 2
+
+  def __init__(self, boardnum, channels=None, address=None, bus=None):
+      self.boardnum = boardnum
+      if channels is None:
+          self.channels = 0
+      else:
+          self.channels = channels
+      if address is None:
+          self.address = 0x48
+      else:
+          self.address = int(address, 16)
+      if bus is None:
+          self.bus = 1
+      else:
+          self.bus = bus
+      if not glob.glob('/dev/i2c*'):
+          raise OSError('Cannot access I2C. Please ensure I2C is enabled')
+      self._bus = smbus2.SMBus(self.bus)
+      self.my_zero = 19920
+
+  def toJSON(self):
+      return {'boardnum':self.boardnum,'type':'i2c-current','channels':self.channels,'address':self.address}
+
+
+
+  def _readvalue():
+	config = 0b1110000011000011
+	self._bus.write_word_data(self.address, 0x01, config)
+	while True:
+		d1 = self._bus.read_word_data(self.address, 0x01)
+	        if d1 == config:
+        		break
+	d1 = self._bus.read_word_data(self.address, 0x00)
+	msb = d1 & 0x00FF
+	lsb = d1 & 0xFF00
+	val = msb << 8 | lsb >> 8
+	return (val - self.my_zero) >> 4
+
+  def setpower(self, channel, power):
+      old_data = data = self.getdata()
+      mask = 1 << channel
+      data &= ~mask
+      if self.inverted:
+          power = not power
+      if power:
+          data |= mask
+      if old_data != data:
+          self.next_refresh = 0
+      return self._bus.write_byte_data(self.address, 0x09,data)
+
+  def getpower(self, channel):
+      data = self.getdata()
+      d = ( data >> channel ) & 1
+      c = 0 if self.inverted else 1
+      return d == c
+
+  def getdata(self):
+      now = time.time()
+      if now > self.next_refresh:
+          self.data = self._bus.read_byte_data(self.address, 0x0A)
+          self.next_refresh = now + self.lifetime_sec
+      return self.data
+
+  def init(self):
+      return self._bus.write_byte_data(self.address, 0x00, 0x00)
+
+
+
+
+
+
+boardsConfigParser = ConfigParser.SafeConfigParser(defaults=boardsDefaults)
+boardsConfigFile = '/etc/openpdu/boards.conf'
+if os.path.isfile(boardsConfigFile) and os.access(boardsConfigFile, os.R_OK):
+  boardsConfigParser.read(boardsConfigFile)
+
+for s in boardsConfigParser.sections():
+  if re.match('^board.*',s):
+      bType = boardsConfigParser.get(s, 'type')
+      num = int(re.sub(r'^board','',s))
+      inverted = int('0' + boardsConfigParser.get(s, 'inverted')) == 1
+      channels = int(boardsConfigParser.get(s, 'channels'))
+      if bType=='gpio-out':
+          gpios = []
+          for g in range(0,channels):
+              gpios.append(int(boardsConfigParser.get(s, 'channel%s' % g)))
+          b = BoardGpioOut(boardnum=num, channels=channels, gpios=gpios, inverted=inverted)
+          _boards.append(b)
+      elif bType=='i2c-out':
+          address = boardsConfigParser.get(s, 'address')
+          bus = boardsConfigParser.get(s, 'bus')
+          b = BoardI2COut(boardnum=num, channels=channels, address=address, bus=bus, inverted=inverted)
+          _boards.append(b)
+      elif bType=='dummy':
+          filename = boardsConfigParser.get(s, 'filename')
+          b = BoardDummy(boardnum=num, channels=channels, filename=filename)
+          _boards.append(b)
+
+outletsConfigParser = ConfigParser.SafeConfigParser(defaults=outletsDefaults)
+outletsConfig = '/etc/openpdu/outlets.conf'
+if os.path.isfile(outletsConfig) and os.access(outletsConfig, os.R_OK):
+  outletsConfigParser.read(outletsConfig)
+for s in outletsConfigParser.sections():
+  if re.match('^outlet.*',s):
+      num = int(re.sub(r'^outlet','',s))
+      description = outletsConfigParser.get(s, 'description')
+      boardnum = outletsConfigParser.get(s, 'board')
+      channel = outletsConfigParser.get(s, 'channel')
+      startpower = int('0' + outletsConfigParser.get(s, 'startpower')) == 1
+      o = Outlet(outletnum=num, boardnum=boardnum, channel=channel, startpower=startpower)
+      o.description = description
+      _outlets.append(o)
+
+
+
+
+run(host='0.0.0.0', port=5000)
+
+
