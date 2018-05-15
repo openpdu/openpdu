@@ -12,8 +12,7 @@ import json as JSON
 from bottle import route, run, template
 import smbus2
 #import math
-#from numpy import mean, sqrt, square
-
+from numpy import mean, sqrt, square
 
 
 
@@ -81,7 +80,16 @@ def index(outlet):
     out = theOutlet.getpower()
     return JSON.dumps({'powerstatus':out,'outlet':outlet})
 
-
+@route('/outlet/<outlet>/current')
+def index(outlet):
+    outlet=int(outlet)
+    o = [o for o in _outlets if o.outletnum==outlet]
+    if len(o) != 1:
+        msg = 'wrong outlet number: %s' % str(outlet)
+        return JSON.dumps({'message':msg})
+    theOutlet = o[0]
+    out = theOutlet.getcurrent()
+    return JSON.dumps({'current':out,'outlet':outlet})
 
 
 
@@ -247,6 +255,8 @@ class Outlet(object):
       self.channel = int(channel)
       self.description = 'Outlet # %s' % self.outletnum
       self.startpower = startpower
+      self.currentboard = None
+      self.currentboardchannel = None
 
   def init(self):
       self.setpower(self.startpower)
@@ -261,6 +271,17 @@ class Outlet(object):
 
   def getpower(self):
       return self.board.getpower(self.channel)
+
+  def getcurrent(self):
+      if self.currentboard is None:
+          return 0
+      return self.currentboard.readcurrent(self.currentboardchannel)
+
+  def setcurrentboard(self, boardnum, channel):
+      b = [b for b in _boards if b.boardnum==int(boardnum)]
+      self.currentboard = b[0]
+      self.currentboardchannel = channel
+          
 
   def toJSON(self):
     status = self.board.getpower(self.channel)
@@ -292,54 +313,96 @@ class BoardI2Ccurrent(object):
           raise OSError('Cannot access I2C. Please ensure I2C is enabled')
       self._bus = smbus2.SMBus(self.bus)
       self.my_zero = 19920
+      self.num_samples = 100
 
   def toJSON(self):
       return {'boardnum':self.boardnum,'type':'i2c-current','channels':self.channels,'address':self.address}
 
+  def _readvalue(self, channel):
+    # 0 = no effect / 1 = start a single conversion
+    cfg_OS = 1
 
+    # multiplexer configurations:
+    cfg_chan = 0b100
+    if channel == 0:
+        # AIN0 -> GND
+        cfg_chan = 0b100
+    elif channel == 1:
+        # AIN1 -> GND
+        cfg_chan = 0b101
+    elif channel == 2:
+        # AIN2 -> GND
+        cfg_chan = 0b110
+    elif channel == 3:
+        # AIN3 -> GND
+        cfg_chan = 0b111
+    # unused multiplexer configurations:
+    # 0b000 AIN0 -> AIN1
+    # 0b001 AIN0 -> AIN3
+    # 0b010 AIN1 -> AIN3
+    # 0b011 AIN2 -> AIN3
 
-  def _readvalue():
-	config = 0b1110000011000011
-	self._bus.write_word_data(self.address, 0x01, config)
-	while True:
-		d1 = self._bus.read_word_data(self.address, 0x01)
-	        if d1 == config:
-        		break
-	d1 = self._bus.read_word_data(self.address, 0x00)
-	msb = d1 & 0x00FF
-	lsb = d1 & 0xFF00
-	val = msb << 8 | lsb >> 8
-	return (val - self.my_zero) >> 4
+    # gain amplifier configuration
+    #  000 = +- 6.144 V
+    #  001 = +- 4,096 V
+    #  010 = +- 2,048 V
+    #  011 = +- 1,024 V
+    #  100 = +- 0,512 V
+    #  101 = +- 0,256 V
+    #  110 = +- 0,256 V
+    #  111 = +- 0,256 V
+    cfg_amplifier = 0b000
 
-  def setpower(self, channel, power):
-      old_data = data = self.getdata()
-      mask = 1 << channel
-      data &= ~mask
-      if self.inverted:
-          power = not power
-      if power:
-          data |= mask
-      if old_data != data:
-          self.next_refresh = 0
-      return self._bus.write_byte_data(self.address, 0x09,data)
+    # 0 = continuous conversion / 1 = single-shot or power-down
+    cfg_mode = 0
 
-  def getpower(self, channel):
-      data = self.getdata()
-      d = ( data >> channel ) & 1
-      c = 0 if self.inverted else 1
-      return d == c
+    # data rate
+    #  000 = 128 sps
+    #  001 = 250 sps
+    #  010 = 490 sps
+    #  011 = 920 sps
+    #  100 = 1600 sps
+    #  101 = 2400 sps
+    #  110 = 3300 sps
+    #  111 = 3300 sps
+    cfg_sps = 0b110 
+    
+    # 0 = traditional comparator / 1 = window comparator
+    cfg_comp = 0
 
-  def getdata(self):
-      now = time.time()
-      if now > self.next_refresh:
-          self.data = self._bus.read_byte_data(self.address, 0x0A)
-          self.next_refresh = now + self.lifetime_sec
-      return self.data
+    # 0 = comparator active low / 1 = comparator active high
+    cfg_comp_pol = 0
 
-  def init(self):
-      return self._bus.write_byte_data(self.address, 0x00, 0x00)
+    # 0 = comparator non-latching / 1 = comparator latching
+    cfg_comp_latch = 0
+    
+    # comparator queue and disable
+    #  00 = assert after one conversion
+    #  01 = assert after two conversions
+    #  10 = assert after three conversions
+    #  11 = disable comparator
+    cfg_comp_queue = 0b11
 
+    config = cfg_OS << 15 | cfg_chan << 12 | cfg_amplifier << 9 | cfg_mode << 8 | cfg_sps << 5 | cfg_comp << 4 | cfg_comp_pol << 3 | cfg_comp_latch << 2 | cfg_comp_queue
+    
+    self._bus.write_word_data(self.address, 0x01, config)
+    while True:
+	    d1 = self._bus.read_word_data(self.address, 0x01)
+            if d1 == config:
+                break
+    d1 = self._bus.read_word_data(self.address, 0x00)
+    msb = d1 & 0x00FF
+    lsb = d1 & 0xFF00
+    val = msb << 8 | lsb >> 8
+    return (val - self.my_zero) >> 4
 
+  def readcurrent(self, channel):
+	samples = []
+	for i in range(1,self.num_samples):
+		v = self._readvalue(channel)
+		samples.append(v)
+	rms = sqrt(mean(square(samples)))
+	return rms
 
 
 
@@ -366,6 +429,11 @@ for s in boardsConfigParser.sections():
           bus = boardsConfigParser.get(s, 'bus')
           b = BoardI2COut(boardnum=num, channels=channels, address=address, bus=bus, inverted=inverted)
           _boards.append(b)
+      elif bType=='i2c-current':
+          address = boardsConfigParser.get(s, 'address')
+          bus = boardsConfigParser.get(s, 'bus')
+          b = BoardI2Ccurrent(boardnum=num, channels=channels, address=address, bus=bus)
+          _boards.append(b)
       elif bType=='dummy':
           filename = boardsConfigParser.get(s, 'filename')
           b = BoardDummy(boardnum=num, channels=channels, filename=filename)
@@ -384,11 +452,24 @@ for s in outletsConfigParser.sections():
       startpower = int('0' + outletsConfigParser.get(s, 'startpower')) == 1
       o = Outlet(outletnum=num, boardnum=boardnum, channel=channel, startpower=startpower)
       o.description = description
+      if outletsConfigParser.has_option(s,'currentboard') and outletsConfigParser.has_option(s,'currentboardchannel'):
+          currentboard = outletsConfigParser.get(s, 'currentboard')
+          currentboardchannel = int(outletsConfigParser.get(s, 'currentboardchannel'))
+          o.setcurrentboard(currentboard, currentboardchannel)
       _outlets.append(o)
 
 
 
-
-run(host='0.0.0.0', port=5000)
+for sec in range(1,100):
+    for outlet in range(0,4):
+        o = [o for o in _outlets if o.outletnum==outlet]
+        if len(o) != 1:
+            msg = 'wrong outlet number: %s' % str(outlet)
+            print JSON.dumps({'message':msg})
+        theOutlet = o[0]
+        out = theOutlet.getcurrent()
+        print JSON.dumps({'current':out,'outlet':outlet})
+    print "---"
+#run(host='0.0.0.0', port=5000)
 
 
