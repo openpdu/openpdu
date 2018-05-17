@@ -281,7 +281,7 @@ class Outlet(object):
       b = [b for b in _boards if b.boardnum==int(boardnum)]
       self.currentboard = b[0]
       self.currentboardchannel = channel
-          
+
 
   def toJSON(self):
     status = self.board.getpower(self.channel)
@@ -354,7 +354,7 @@ class BoardI2Ccurrent(object):
     cfg_amplifier = 0b000
 
     # 0 = continuous conversion / 1 = single-shot or power-down
-    cfg_mode = 0
+    cfg_mode = 1
 
     # data rate
     #  000 = 128 sps
@@ -365,8 +365,8 @@ class BoardI2Ccurrent(object):
     #  101 = 2400 sps
     #  110 = 3300 sps
     #  111 = 3300 sps
-    cfg_sps = 0b110 
-    
+    cfg_sps = 0b110
+
     # 0 = traditional comparator / 1 = window comparator
     cfg_comp = 0
 
@@ -375,7 +375,7 @@ class BoardI2Ccurrent(object):
 
     # 0 = comparator non-latching / 1 = comparator latching
     cfg_comp_latch = 0
-    
+
     # comparator queue and disable
     #  00 = assert after one conversion
     #  01 = assert after two conversions
@@ -383,8 +383,8 @@ class BoardI2Ccurrent(object):
     #  11 = disable comparator
     cfg_comp_queue = 0b11
 
-    config = cfg_OS << 15 | cfg_chan << 12 | cfg_amplifier << 9 | cfg_mode << 8 | cfg_sps << 5 | cfg_comp << 4 | cfg_comp_pol << 3 | cfg_comp_latch << 2 | cfg_comp_queue
-    
+    config = cfg_sps << 13 | cfg_comp << 12 | cfg_comp_pol << 11 | cfg_comp_latch << 10 | cfg_comp_queue << 8 | cfg_OS << 7 | cfg_chan << 4 | cfg_amplifier << 1 | cfg_mode
+
     self._bus.write_word_data(self.address, 0x01, config)
     while True:
 	    d1 = self._bus.read_word_data(self.address, 0x01)
